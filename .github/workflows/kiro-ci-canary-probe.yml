@@ -68,11 +68,14 @@ jobs:
           EXPORT_FILES: ${{ steps.fixture.outputs.credential_export_files }}
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, re
           from pathlib import Path
           path = Path(os.environ.get('EXECUTION_FILE', ''))
+          if not path.is_file():
+              path = Path(os.environ['RUNNER_TEMP']) / 'claude-execution-output.json'
           marker = 'KIRO_188_HOSTED_ONLY'
           found = False
+          error_excerpt = ''
           if path.is_file():
               for line in path.read_text().splitlines():
                   try:
@@ -81,6 +84,15 @@ jobs:
                       continue
                   if isinstance(row, dict) and row.get('type') == 'result' and marker in str(row.get('result', '')):
                       found = True
+                  if isinstance(row, dict) and row.get('type') == 'result' and row.get('is_error'):
+                      error_excerpt = str(row.get('result') or row.get('error') or '')[:300]
+                  if isinstance(row, dict) and row.get('type') == 'assistant':
+                      message = row.get('message') or {}
+                      if isinstance(message, dict) and message.get('error'):
+                          error_excerpt = str(message['error'])[:300]
+          error_excerpt = re.sub(r'(?:AKIA|ASIA)[A-Z0-9]{16}', '[KEY]', error_excerpt)
+          error_excerpt = re.sub(r'(?i)(aws_secret_access_key|aws_session_token)\s*[:=]\s*\S+', r'\1=[REDACTED]', error_excerpt)
           print('credential_export_file_present=' + str(int(os.environ.get('EXPORT_FILES', '0') or '0') >= 1).lower())
           print('synthetic_canary_in_model_final=' + str(found).lower())
+          print('model_error_excerpt=' + error_excerpt)
           PY
