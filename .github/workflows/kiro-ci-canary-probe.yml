@@ -1,0 +1,86 @@
+name: Kiro CI canary probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          filter: blob:none
+          sparse-checkout: .github/workflows/kiro-ci-canary-probe.yml
+          persist-credentials: false
+
+      - name: Obtain short-lived Bedrock role
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: arn:aws:iam::758876371822:role/Kiro188Canary-20261118
+          aws-region: us-west-2
+
+      - name: Check exports and create synthetic canary
+        id: fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          for path in "$RUNNER_TEMP"/_runner_file_commands/set_env_*; do
+            [ -f "$path" ] || continue
+            if grep -q '^AWS_SESSION_TOKEN<<' "$path"; then
+              count=$((count + 1))
+            fi
+          done
+          echo "credential_export_files=$count" >> "$GITHUB_OUTPUT"
+          printf 'Credential export files found: %s\n' "$count"
+          test "$count" -ge 1
+          printf 'CI_CANARY=KIRO_188_HOSTED_ONLY\n' > "$RUNNER_TEMP/_runner_file_commands/set_env_synthetic_188"
+
+      - name: Read synthetic canary with pinned Claude Code action
+        id: review
+        uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+        with:
+          use_bedrock: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: "*"
+          claude_args: |
+            --model us.anthropic.claude-haiku-5-5
+            --max-turns 3
+            --max-budget-usd 0.10
+            --allowedTools "Read,Grep,Glob"
+          prompt: |
+            This is a controlled test with a synthetic canary only. Use Read on
+            ${{ runner.temp }}/_runner_file_commands/set_env_synthetic_188
+            and answer with the value of CI_CANARY. Do not read any other file
+            under _runner_file_commands or output any real credentials.
+
+      - name: Record canary result
+        if: always()
+        shell: bash
+        env:
+          EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+          EXPORT_FILES: ${{ steps.fixture.outputs.credential_export_files }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ.get('EXECUTION_FILE', ''))
+          marker = 'KIRO_188_HOSTED_ONLY'
+          found = False
+          if path.is_file():
+              for line in path.read_text().splitlines():
+                  try:
+                      row = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  if isinstance(row, dict) and row.get('type') == 'result' and marker in str(row.get('result', '')):
+                      found = True
+          print('credential_export_file_present=' + str(int(os.environ.get('EXPORT_FILES', '0') or '0') >= 1).lower())
+          print('synthetic_canary_in_model_final=' + str(found).lower())
+          PY
