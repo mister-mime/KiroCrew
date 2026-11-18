@@ -42,6 +42,18 @@ jobs:
           test "$count" -ge 1
           printf 'CI_CANARY=KIRO_188_HOSTED_ONLY\n' > "$RUNNER_TEMP/_runner_file_commands/set_env_synthetic_188"
 
+      - name: Verify temporary role can call Bedrock
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' '{"anthropic_version":"bedrock-2023-05-31","max_tokens":5,"messages":[{"role":"user","content":"Reply OK"}]}' > "$RUNNER_TEMP/bedrock-ping.json"
+          aws bedrock-runtime invoke-model --region us-west-2 \
+            --model-id us.anthropic.claude-haiku-5-5 \
+            --body "fileb://$RUNNER_TEMP/bedrock-ping.json" \
+            --content-type application/json --accept application/json \
+            "$RUNNER_TEMP/bedrock-ping-result.json" >/dev/null
+          echo 'bedrock_ping=ok'
+
       - name: Read synthetic canary with pinned Claude Code action
         id: review
         uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
@@ -76,23 +88,40 @@ jobs:
           marker = 'KIRO_188_HOSTED_ONLY'
           found = False
           error_excerpt = ''
+          result_error = False
+          event_types = []
+          assistant_text = ''
           if path.is_file():
               for line in path.read_text().splitlines():
                   try:
                       row = json.loads(line)
                   except json.JSONDecodeError:
                       continue
+                  if isinstance(row, dict):
+                      event_types.append(str(row.get('type', '')))
                   if isinstance(row, dict) and row.get('type') == 'result' and marker in str(row.get('result', '')):
                       found = True
                   if isinstance(row, dict) and row.get('type') == 'result' and row.get('is_error'):
+                      result_error = True
                       error_excerpt = str(row.get('result') or row.get('error') or '')[:300]
                   if isinstance(row, dict) and row.get('type') == 'assistant':
                       message = row.get('message') or {}
                       if isinstance(message, dict) and message.get('error'):
                           error_excerpt = str(message['error'])[:300]
+                      if isinstance(message, dict):
+                          for block in message.get('content') or []:
+                              if isinstance(block, dict) and block.get('type') == 'text':
+                                  assistant_text = str(block.get('text', ''))[:300]
           error_excerpt = re.sub(r'(?:AKIA|ASIA)[A-Z0-9]{16}', '[KEY]', error_excerpt)
           error_excerpt = re.sub(r'(?i)(aws_secret_access_key|aws_session_token)\s*[:=]\s*\S+', r'\1=[REDACTED]', error_excerpt)
+          assistant_text = re.sub(r'(?:AKIA|ASIA)[A-Z0-9]{16}', '[KEY]', assistant_text)
+          assistant_text = re.sub(r'(?i)(aws_secret_access_key|aws_session_token)\s*[:=]\s*\S+', r'\1=[REDACTED]', assistant_text)
           print('credential_export_file_present=' + str(int(os.environ.get('EXPORT_FILES', '0') or '0') >= 1).lower())
           print('synthetic_canary_in_model_final=' + str(found).lower())
+          print('execution_file_present=' + str(path.is_file()).lower())
+          print('execution_event_types=' + ','.join(event_types[-8:]))
+          print('result_is_error=' + str(result_error).lower())
           print('model_error_excerpt=' + error_excerpt)
+          if result_error and not found:
+              print('assistant_text_excerpt=' + assistant_text)
           PY
