@@ -24,6 +24,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::481026676690:role/Kiro188Canary-20261118
           aws-region: us-west-2
+          role-duration-seconds: 900
 
       - name: Check exports and create synthetic canary
         id: fixture
