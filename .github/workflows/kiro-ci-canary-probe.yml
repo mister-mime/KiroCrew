@@ -22,7 +22,7 @@ jobs:
       - name: Obtain short-lived Bedrock role
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
-          role-to-assume: arn:aws:iam::758876371822:role/Kiro188Canary-20261118
+          role-to-assume: arn:aws:iam::481026676690:role/Kiro188Canary-20261118
           aws-region: us-west-2
 
       - name: Check exports and create synthetic canary
